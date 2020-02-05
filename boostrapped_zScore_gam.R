@@ -21,8 +21,27 @@ a = gam(tcv ~s(age, bs = "cs", k =4) +acode+s(participant, bs = "re"), method = 
 #a' = gam(tcv ~s(age, participant, bs = "fs", k =4) +acode, method = "ML", data =thedataF_pilar2)
 # or
 #a' = gam(tcv ~ age + s(age, by = participant) +acode, method = "ML", data =thedataF_pilar2)
-# I cannot applied a' due to the number of observations. Something in the middle woud be: 
+# I cannot applied a' due to the number of observations. Something in the middle woud be it similar to a 
 b= gam(tcv ~ ti(age, participant, bs = c("cs", "re"), k = c(3,3)) + acode, method = "ML", data =thedataF_pilar2)
+
+c = gam(tcv ~s(age, bs = "cs", k =4), method = "ML", data =thedataF_pilar2)
+
+a_predictions_raw = predict(a, se.fit =T)  
+a_predictions_corrected = predict(a, type = "response", se.fit =T, exclude = "s(participant)")  
+b_predictions_raw = predict(b, se.fit =T)  
+b_predictions_corrected = predict(b, type = "response", se.fit =T, exclude = "s(participant)")  
+
+thedataF_pilar2 = within(thedataF_pilar2, {
+  fit_a = a_predictions_raw$fit
+  fit.se = a_predictions_raw$se.fit
+  fit_a_corr = a_predictions_corrected$fit
+  fit_a_corr.se = a_predictions_corrected$se.fit
+  fit_b = b_predictions_raw$fit
+  fit_b.se = b_predictions_raw$se.fit
+  fit_b_corr = b_predictions_corrected$fit
+  fit_b_corr.se = b_predictions_corrected$se.fit
+})
+
 
 #Model comparison
 summary(a)
@@ -30,6 +49,21 @@ summary(b)
 # sumaries reveals a slightly better r^2 for and slightly worse deviance explained
 anova(a,b) #No differences
 AIC(a,b) #The samllest the best fiting (overfitting could occurs)
+
+#This visualization clear the overfitting problem when participant is included. 
+# The number of unique subjects is not enough for modeling this effect 
+#(we cannot even employ the needed formulas due to the unique number of subjects)
+# Actually the c model (the simplest, in yellow) points to an asyntotically behaviour which probably makes more sense than the a model
+# when acode is included, the curve shows some small overfitting problems
+# WARNING: this does not mean that the model with acode and participant is incorrect. 
+# Hopefully, a model with 10 or more repeated measures would work better than the simplest.
+ggplot(thedataF_pilar2, aes(x = age, y = tcv, color = acode)) + 
+  geom_point(show.legend = F) + 
+  geom_line(aes(y = fit_a), color = "royalblue1", alpha = 0.3) + 
+  geom_line(aes(y = fit_a_corr), color = "green", alpha = 0.8) + 
+  geom_line(aes(y = fit_a), color = "darkgrey", alpha = 0.3) +  
+  geom_line(aes(y = fit_b_corr), color = "purple", alpha = 0.3)+ 
+  geom_line(aes(y = predict(c)), color = "yellow", alpha = 0.8)
 
 # visualize. ggplot and gam models are not really freindly together (itsadug library kind of ease the process)
 pred_a = get_predictions(a, 
