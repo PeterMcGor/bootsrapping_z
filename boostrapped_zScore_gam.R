@@ -1,14 +1,36 @@
 library(mgcv)
 library(ggplot2)
-library(itsadug)
-
+library(dplyr)
 empirical_confidence_interval <- function(statistic, alpha = 0.95){
   lower = quantile(statistic, max(0,((1.0-alpha)/2.0)))[[1]]
   upper = quantile(statistic, min((alpha+((1.0-alpha)/2.0))))[[1]]
   return (c(lower, upper))
 }
 
-setwd("/home/pmacias/Projects/JanJo/")
+#when se can be estimated as the standard deviation. To our pupose its the same to scale it 
+get_z_se <- function(data_w_preds) {
+  data_w_preds$z_se =  (data_w_preds$tcv - data_w_preds$fit) / data_w_preds$se.fit
+  return(data_w_preds)
+}
+
+
+#the variance of the posterior distribution
+get_z_frm_post_sd <- function(data_w_preds, gam_model) {
+  data_w_preds$z_sd_post = (data_w_preds$tcv - data_w_preds$fit) / sqrt(gam_model$sig2)
+  return(data_w_preds)
+}
+
+#Andre uses for the expected variance all the data (training and test), note really sure about how correct is that
+get_z_pseudoandre <- function(data_w_preds, expected_sd) {
+  data_w_preds$z_an = (data_w_preds$tcv - data_w_preds$fit) / sqrt(expected_sd**2*data_w_preds$se.fit) 
+  return(data_w_preds)
+}
+
+get_all_z <- function(data_w_preds, gam_model, expected_sd) {
+  return (data_w_preds %>% get_z_se() %>% get_z_frm_post_sd(gam_model) %>% get_z_pseudoandre(expected_sd) )
+}
+
+setwd("/home/pmacias/Projects/JanJo/bootsrapping_z/")
 
 thedataF_pilar2 = read.csv("thedataF_pilar2.csv")
 thedataM_pilar2 = read.csv("thedataM_pilar2.csv")
@@ -65,32 +87,12 @@ ggplot(thedataF_pilar2, aes(x = age, y = tcv, color = acode)) +
   geom_line(aes(y = fit_b_corr), color = "purple", alpha = 0.3)+ 
   geom_line(aes(y = predict(c)), color = "yellow", alpha = 0.8)
 
-# visualize. ggplot and gam models are not really freindly together (itsadug library kind of ease the process)
-pred_a = get_predictions(a, 
-                         cond = list(age = seq(min(thedataF_pilar2$age, na.rm=T),
-                                             max(thedataF_pilar2$age, na.rm=T), 
-                                             length.out = nrow(thedataF_pilar2)), se=T))
-
-pred_b = get_predictions(b, 
-                         cond = list(age = seq(min(thedataF_pilar2$age, na.rm=T),
-                                               max(thedataF_pilar2$age, na.rm=T), 
-                                               length.out = nrow(thedataF_pilar2)), se=T))
-
-
-pred_a$tcv  = pred_a$fit #create dummy tcv for consistance
-pred_b$tcv = pred_b$fit
-
-ggplot(thedataF_pilar2, aes(x = age, y = tcv, acode = acode, participant = participant)) + 
-  geom_line(alpha=.3,aes(group=participant)) + 
-  geom_point(alpha=.3) +
-  geom_ribbon(data=pred_a, alpha=.6, aes(ymin=fit-CI, ymax=fit+CI), show.legend = F, fill='forestgreen') +  
-  geom_line(data = pred_a, show.legend = F, color='forestgreen') + 
-  geom_ribbon(data=pred_b, alpha=.2, aes(ymin=fit-CI, ymax=fit+CI), show.legend = F, fill='royalblue1') +  
-  geom_line(data = pred_b, show.legend = F, color='royalblue1')
 
 
 thedataM_pilar2$participant <- rep(thedataF_pilar2$subID[1], nrow(thedataM_pilar2)) # esto para qué?
-pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)"))
+females_ss = thedataF_pilar2[c("age", "tcv", "acode", "participant")]
+males_ss = thedataM_pilar2[c("age", "tcv", "acode", "participant")]
+pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =males_ss,type = "response", se.fit =T, exclude = "s(participant)"))
 
 ### SE vs sigma
 ## That standard error is the uncertainty in the estimate for the expected/fitted value. 
@@ -98,30 +100,58 @@ pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =thedataM_pilar2,t
 #Creo que esto no tiene mucho sentido. Para tener la sigma, habría que plantear un modelo heterocedastico (una sigma diferente point/bin wise)
 # Se podría calcular el intervalo de confianza con el SE como mu +- 1.96 fit.se
 ## Cuando Andre saca las Zs qué sigma utiliza??
-pred_vals_thedataM_pilar2$sd.fit <- pred_vals_thedataM_pilar2$se.fit*sqrt(311) 
 #con el GAM la sigma es la misma para todos los puntos
-pred_vals_thedataF_pilar2$real_sd.fit = sqrt(a$sig2)
 
-pred_vals_thedataM_pilar2$Z <- (thedataM_pilar2$tcv - pred_vals_thedataM_pilar2$fit) / pred_vals_thedataM_pilar2$sd.fit
-pred_vals_thedataM_pilar2$Z_sig <- (thedataM_pilar2$tcv - pred_vals_thedataM_pilar2$fit) / sqrt(a$sig2)
-
-z = as.data.frame(pred_vals_thedataM_pilar2$Z)
-z_sig = as.data.frame(pred_vals_thedataM_pilar2$Z_sig)
-
+#I use the expted variance of the training data
+pred_vals_thedataM_pilar2 = get_all_z(cbind(males_ss, pred_vals_thedataM_pilar2), gam_model = a,
+                                      expected_sd = sd(thedataF_pilar2$tcv))
 
 
 # Fit models to 100 bootstrap replicates of the data
+set.seed(69)
 predictions = replicate(
   10,{
-    boot = thedataF_pilar2[sample.int(nrow(thedataF_pilar2), replace = TRUE), ]
-    thedataM_pilar2$participant <- rep(boot$subID[1], nrow(thedataM_pilar2))
-    model = gam(tcv ~s(age, bs = "cs", k =4) +acode +s(participant, bs = "re"), method = "ML", data =boot)
-    # Output predictions at each point that we'll want to plot later
-    predictions = as.data.frame(predict(model,newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)"))
-    #predictions$real_sd.fit =  sqrt(model$sig2)
-    return (thedataM_pilar2$tcv - predictions$fit) / sqrt(model$sig2)
+    boot = females_ss [sample.int(nrow(females_ss), replace = T), ]
+    boot = boot[c("age", "tcv", "acode", "participant")]
+    males_ss$participant <- rep(boot$participant[1], nrow(males_ss))
+    model = gam(tcv ~ s(age, bs="cs", k=4) +acode +s(participant, bs = "re"), method = "ML", data = boot)
+
+    exp_sd = sd(boot$tcv) #Andre employs the whole sample not just training...
+    type = "response"
+    predictions_females = as.data.frame(predict(model, type = type, se.fit =T, exclude = "s(participant)"))
+    predictions_females = get_all_z(cbind(boot, predictions_females), gam_model = model, expected_sd = exp_sd)
+    
+    predictions_males = as.data.frame(predict(model, newdata =males_ss, type = type, se.fit =T, exclude = "s(participant)"))
+    predictions_males = get_all_z(cbind(males_ss, predictions_males), gam_model = model,expected_sd = exp_sd )
+    return(list("predictions_females"=predictions_females, "predictions_males"=predictions_males))
   }
 )
+
+
+female_model = predictions[,1]$predictions_females
+female_model$replicate = 1
+male_model = predictions[,1]$predictions_males
+male_model$replicate = 1
+#female_predictions = as.data.frame(predictions[,1]$predictions_females)
+#female_predictions$replicate = 1
+for (i in 2:dim(predictions)[2]) {
+  female_ss = predictions[,i]$predictions_females
+  male_ss = predictions[,i]$predictions_males
+  
+  female_ss$replicate = i
+  male_ss$replicate = i
+  
+  female_model = rbind(female_model, female_ss)
+  male_model = rbind(male_model, male_ss)
+}
+
+ggplot() +
+  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = "royalblue1") +
+  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = "yellow") + 
+  geom_point(data = thedataF_pilar2, aes(x=age, y=tcv), color = "royalblue1") +
+  geom_point(data = thedataM_pilar2, aes(x=age, y=tcv), color = "yellow")
+
+
 df <- data.frame(matrix(unlist(predictions), ncol=length(predictions), byrow=F))
 #write.csv(df, "./Documentos/GM/sex differences docs/bootstrap_tcv.csv")
 df = read.csv("./Documentos/GM/sex differences docs/bootstrap_tcv.csv")
@@ -154,6 +184,22 @@ colnames(males)<-seq(1:1000)
 substraction=as.data.frame(Map("-", males, fit))
 ZZ = as.data.frame(Map("/", substraction, sd))
 #write.csv(ZZ, "./Documentos/GM/sex differences docs/boot_z_scores_tcv.csv")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ######### MODEL cortex_sulcalwidth_brainvisa #############
