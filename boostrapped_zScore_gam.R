@@ -81,11 +81,11 @@ AIC(a,b) #The samllest the best fiting (overfitting could occurs)
 # Hopefully, a model with 10 or more repeated measures would work better than the simplest.
 ggplot(thedataF_pilar2, aes(x = age, y = tcv, color = acode)) + 
   geom_point(show.legend = F) + 
-  geom_line(aes(y = fit_a), color = "royalblue1", alpha = 0.3) + 
+  geom_line(aes(y = fit_a), color = female_color, alpha = 0.3) + 
   geom_line(aes(y = fit_a_corr), color = "green", alpha = 0.8) + 
   geom_line(aes(y = fit_a), color = "darkgrey", alpha = 0.3) +  
   geom_line(aes(y = fit_b_corr), color = "purple", alpha = 0.3)+ 
-  geom_line(aes(y = predict(c)), color = "yellow", alpha = 0.8)
+  geom_line(aes(y = predict(c)), color = male_color, alpha = 0.8)
 
 
 
@@ -102,15 +102,16 @@ pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =males_ss,type = "
 ## Cuando Andre saca las Zs qué sigma utiliza??
 #con el GAM la sigma es la misma para todos los puntos
 
-#I use the expted variance of the training data
+#I use the expected variance of the training data
 pred_vals_thedataM_pilar2 = get_all_z(cbind(males_ss, pred_vals_thedataM_pilar2), gam_model = a,
                                       expected_sd = sd(thedataF_pilar2$tcv))
 
 
 # Fit models to 100 bootstrap replicates of the data
 set.seed(69)
+n_boots = 100
 predictions = replicate(
-  10,{
+  n_boots,{
     boot = females_ss [sample.int(nrow(females_ss), replace = T), ]
     boot = boot[c("age", "tcv", "acode", "participant")]
     males_ss$participant <- rep(boot$participant[1], nrow(males_ss))
@@ -145,171 +146,47 @@ for (i in 2:dim(predictions)[2]) {
   male_model = rbind(male_model, male_ss)
 }
 
+female_color = "royalblue1"
+male_color = "yellow"
+
+#Just tcv fitting...must be the same
 ggplot() +
-  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = "royalblue1") +
-  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = "yellow") + 
-  geom_point(data = thedataF_pilar2, aes(x=age, y=tcv), color = "royalblue1") +
-  geom_point(data = thedataM_pilar2, aes(x=age, y=tcv), color = "yellow")
+  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = female_color) +
+  geom_line(data=female_model, aes(x = age, y = fit, group = replicate), color = male_color) + 
+  geom_point(data = thedataF_pilar2, aes(x=age, y=tcv), color = female_color) +
+  geom_point(data = thedataM_pilar2, aes(x=age, y=tcv), color = male_color)
 
+#visualize Z differences betwwen sexs
+ggplot(data = female_model, aes(x = age, y=z_an)) + 
+  geom_point(color = female_color) + 
+  geom_point(data = male_model, color = male_color) + 
+  geom_smooth(color = female_color) + 
+  geom_smooth(data = male_model,  color = male_color)
 
-df <- data.frame(matrix(unlist(predictions), ncol=length(predictions), byrow=F))
-#write.csv(df, "./Documentos/GM/sex differences docs/bootstrap_tcv.csv")
-df = read.csv("./Documentos/GM/sex differences docs/bootstrap_tcv.csv")
-df[1]<-NULL
+ggplot(thedataF_pilar2, aes(x=age, y =tcv)) + 
+  geom_smooth(color = female_color) + 
+  geom_point(color = female_color) + 
+  geom_smooth(data=thedataM_pilar2, color = male_color) + 
+  geom_point(data=thedataM_pilar2, color = male_color) + 
+  geom_smooth(data = female_model, aes(y=fit), color = female_color, linetype = "dashed") +
+  geom_smooth(data = male_model, aes(y=fit), color = male_color, linetype = "dashed")
 
-# rename columns
-even_indexes<-seq(2,2000,2)
-odd_indexes<-seq(1,1999,2)
-colnames(df)[odd_indexes] = "fit"
-colnames(df)[even_indexes] = "se.fit"
+male_model_ci = aggregate(z_an ~ age, FUN = empirical_confidence_interval, data=male_model) 
+# aggragattes return a matrix
+male_model_ci = cbind(male_model_ci$age, as.data.frame(male_model_ci$z_an) ) %>% setNames(c("age", "z_an_lower", "z_an_upper"))
+pred_males_w_bootstrap = merge(pred_vals_thedataM_pilar2[!duplicated(pred_vals_thedataM_pilar2$age), ], male_model_ci, by = "age")
+pred_males_w_bootstrap$z_an_in_ci <- 
+  pred_males_w_bootstrap$z_an > pred_males_w_bootstrap$z_an_lower & pred_males_w_bootstrap$z_an < pred_males_w_bootstrap$z_an_upper
 
-# add suffix to differentiate between bootstraps
-colnames(df) <- paste(colnames(df), rep(seq(1,1000), each =2), sep = "_")
+message("percentage of z inside the interval ", 100 *sum(pred_males_w_bootstrap$z_an_in_ci) / nrow(pred_males_w_bootstrap))
 
-# calculate sd
-se = df[even_indexes]
-sd = se*sqrt(389)
-
-#calculate z
-fit = df[odd_indexes]
-n <- 1000
-males<-as.data.frame(do.call("cbind", replicate(n, thedataM_pilar2$tcv, simplify = FALSE)))
-
-#rename all cols to be the same
-colnames(fit)<-seq(1:1000)
-colnames(sd)<-seq(1:1000)
-colnames(males)<-seq(1:1000)
-
-# substract and divide to get z-scores
-substraction=as.data.frame(Map("-", males, fit))
-ZZ = as.data.frame(Map("/", substraction, sd))
-#write.csv(ZZ, "./Documentos/GM/sex differences docs/boot_z_scores_tcv.csv")
+#Warning. The points are the z values when all samples are employed. the error bar, the ones obtained with the boostrapping 
+ggplot(data = pred_males_w_bootstrap, aes(x = age)) + 
+  geom_point(aes(y = z_an, color = factor(acode) )) + 
+  geom_errorbar(aes(ymin = z_an_lower, ymax = z_an_upper, color = factor(acode)), width = 0.4) #+ 
+  #geom_line(data = male_model,  color = male_color, aes(group=replicate, y=z_an))
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-######### MODEL cortex_sulcalwidth_brainvisa #############
-a = gam(cortex_sulcalwidth_brainvisa ~s(age, bs = "cs", k =4) +acode+s(participant, bs = "re"), method = "ML", data =thedataF_pilar2)
-thedataM_pilar2$participant <- rep(thedataF_pilar2$subID[1], nrow(thedataM_pilar2))
-pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)"))
-
-pred_vals_thedataM_pilar2$sd.fit <- pred_vals_thedataM_pilar2$se.fit*sqrt(311)
-
-pred_vals_thedataM_pilar2$Z <- (thedataM_pilar2$cortex_sulcalwidth_brainvisa - pred_vals_thedataM_pilar2$fit) / pred_vals_thedataM_pilar2$sd.fit
-z = as.data.frame(pred_vals_thedataM_pilar2$Z)
-
-
-# Fit models to 100 bootstrap replicates of the data
-predictions = replicate(
-  1000,{
-    boot = thedataF_pilar2[sample.int(nrow(thedataF_pilar2), replace = TRUE), ]
-    thedataM_pilar2$participant <- rep(boot$subID[1], nrow(thedataM_pilar2))
-    model = gam(cortex_sulcalwidth_brainvisa ~s(age, bs = "cs", k =4) +acode +s(participant, bs = "re"), method = "ML", data =boot)
-    # Output predictions at each point that we'll want to plot later
-    predict(model,newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)")
-  }
-)
-df <- data.frame(matrix(unlist(predictions), ncol=length(predictions), byrow=F))
-#write.csv(df, "./Documentos/GM/sex differences docs/bootstrap_cortex_sulcalwidth_brainvisa.csv")
-df = read.csv("./Documentos/GM/sex differences docs/bootstrap_cortex_sulcalwidth_brainvisa.csv")
-df[1]<-NULL
-
-# rename columns
-even_indexes<-seq(2,2000,2)
-odd_indexes<-seq(1,1999,2)
-colnames(df)[odd_indexes] = "fit"
-colnames(df)[even_indexes] = "se.fit"
-
-# add suffix to differentiate between bootstraps
-colnames(df) <- paste(colnames(df), rep(seq(1,1000), each =2), sep = "_")
-
-# calculate sd
-se = df[even_indexes]
-sd = se*sqrt(389)
-
-#calculate z
-fit = df[odd_indexes]
-n <- 1000
-males<-as.data.frame(do.call("cbind", replicate(n, thedataM_pilar2$cortex_sulcalwidth_brainvisa, simplify = FALSE)))
-
-#rename all cols to be the same
-colnames(fit)<-seq(1:1000)
-colnames(sd)<-seq(1:1000)
-colnames(males)<-seq(1:1000)
-
-# substract and divide to get z-scores
-substraction=as.data.frame(Map("-", males, fit))
-ZZ = as.data.frame(Map("/", substraction, sd))
-#write.csv(ZZ, "./Documentos/GM/sex differences docs/boot_z_scores_cortex_sulcalwidth_brainvisa.csv")
-
-
-
-
-######### MODEL cortex_sulcallength_brainvisa #############
-a = gam(cortex_sulcallength_brainvisa ~s(age, bs = "cs", k =4) +acode+s(participant, bs = "re"), method = "ML", data =thedataF_pilar2)
-thedataM_pilar2$participant <- rep(thedataF_pilar2$subID[1], nrow(thedataM_pilar2))
-pred_vals_thedataM_pilar2 <- as.data.frame(predict(a, newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)"))
-
-pred_vals_thedataM_pilar2$sd.fit <- pred_vals_thedataM_pilar2$se.fit*sqrt(311)
-
-pred_vals_thedataM_pilar2$Z <- (thedataM_pilar2$cortex_sulcallength_brainvisa - pred_vals_thedataM_pilar2$fit) / pred_vals_thedataM_pilar2$sd.fit
-z = as.data.frame(pred_vals_thedataM_pilar2$Z)
-
-
-# Fit models to 100 bootstrap replicates of the data
-predictions = replicate(
-  1000,{
-    boot = thedataF_pilar2[sample.int(nrow(thedataF_pilar2), replace = TRUE), ]
-    thedataM_pilar2$participant <- rep(boot$subID[1], nrow(thedataM_pilar2))
-    model = gam(cortex_sulcallength_brainvisa ~s(age, bs = "cs", k =4) +acode +s(participant, bs = "re"), method = "ML", data =boot)
-    # Output predictions at each point that we'll want to plot later
-    predict(model,newdata =thedataM_pilar2,type = "response", se.fit =T, exclude = "s(participant)")
-  }
-)
-
-df <- data.frame(matrix(unlist(predictions), ncol=length(predictions), byrow=F))
-write.csv(df, "./Documentos/GM/sex differences docs/bootstrap_cortex_cortex_sulcallength_brainvisa.csv")
-df = read.csv("./Documentos/GM/sex differences docs/bootstrap_cortex_sulcallength_brainvisa.csv")
-df[1]<-NULL
-
-# rename columns
-even_indexes<-seq(2,2000,2)
-odd_indexes<-seq(1,1999,2)
-colnames(df)[odd_indexes] = "fit"
-colnames(df)[even_indexes] = "se.fit"
-
-# add suffix to differentiate between bootstraps
-colnames(df) <- paste(colnames(df), rep(seq(1,1000), each =2), sep = "_")
-
-# calculate sd
-se = df[even_indexes]
-sd = se*sqrt(389)
-
-#calculate z
-fit = df[odd_indexes]
-n <- 1000
-males<-as.data.frame(do.call("cbind", replicate(n, thedataM_pilar2$cortex_sulcallength_brainvisa, simplify = FALSE)))
-
-#rename all cols to be the same
-colnames(fit)<-seq(1:1000)
-colnames(sd)<-seq(1:1000)
-colnames(males)<-seq(1:1000)
-
-# substract and divide to get z-scores
-substraction=as.data.frame(Map("-", males, fit))
-ZZ = as.data.frame(Map("/", substraction, sd))
-write.csv(ZZ, "./Documentos/GM/sex differences docs/boot_z_scores_cortex_sulcallength_brainvisa.csv")
+ 
